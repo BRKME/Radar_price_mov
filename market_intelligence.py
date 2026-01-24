@@ -160,45 +160,74 @@ class MarketIntelligence:
     def generate_intelligence(self, data: Dict, regime: str, trigger_reason: str) -> str:
         spx_status = 'Market closed' if data['spx']['price'] is None else f"{data['spx']['change']:+.1f}% (daily)"
         
+        # Calculate volume anomaly ratio
+        btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
+        btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
+        
+        eth_vol_ma = self.calculate_volume_ma(data['eth']['df'])
+        eth_vol_ratio = data['eth']['volume'] / eth_vol_ma if eth_vol_ma > 0 else 1.0
+        
+        # Calculate ATR (Average True Range) for volatility
+        btc_df = data['btc']['df'].copy()
+        btc_df['tr'] = btc_df[['high', 'low']].apply(lambda x: x['high'] - x['low'], axis=1)
+        atr = btc_df['tr'].tail(14).mean()
+        
         context = f"""MARKET DATA:
 
-BTC: ${data['btc']['price']:,.0f} ({data['btc']['change_24h']:+.1f}% 24h)
-ETH: ${data['eth']['price']:,.0f} ({data['eth']['change_24h']:+.1f}% 24h)
-SPX: {spx_status}
+BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Volume anomaly: {btc_vol_ratio:.1f}x MA
+ETH: ${data['eth']['price']:,.0f} | 24h: {data['eth']['change_24h']:+.1f}%
+ETH Volume anomaly: {eth_vol_ratio:.1f}x MA
 
-BTC Volume: ${data['btc']['volume']:,.0f}
-ETH Volume: ${data['eth']['volume']:,.0f}
+SPX: {spx_status}
+ATR (14): ${atr:,.0f}
 
 Classified Regime: {regime}
 Trigger: {trigger_reason}
 """
 
-        system_prompt = """You are an institutional crypto market analyst (Bloomberg/Glassnode tier).
+        system_prompt = """You are an institutional-grade crypto market intelligence engine.
+Produce concise, quant-driven market briefs with actionable signals.
 
-Generate a report in this EXACT structure:
+OUTPUT FORMAT (STRICT):
 
-Market regime: <regime>
+1) Market Regime Classification
+Market Regime: <regime from user data>
+Drivers: <specific quant indicators from data - volume ratio, price action, ATR>
 
-Price Move Snapshot
-<2-3 sentences: factual price action, volume, volatility>
+2) Price & Liquidity Snapshot
+Include only quant-relevant metrics. Format: 2-3 concise sentences with specific numbers.
+- BTC/ETH price deltas
+- Volume vs MA ratios
+- ATR / volatility context
+- Liquidity conditions (SPX status, session type)
 
-AI Macro Interpretation
-<3-4 sentences: explain WHY using macro + crypto factors. No speculation without probabilistic framing.>
+3) Hard Signal Interpretation
+Replace generic macro with concrete hypotheses based on available data.
+Use probabilistic language. 3-4 sentences.
+Since you don't have OI/funding data, focus on:
+- Volume spike patterns (accumulation vs distribution)
+- Cross-asset correlation implications (SPX closed/open)
+- Price-volume divergences
+- Regime transition signals
 
-Institutional Summary (Alpha Take)
-Base case: <most likely scenario>
-Alt scenario: <alternative path>
-Positioning bias: <risk-on/risk-off/neutral>
+4) Institutional Alpha Take
+Format:
+Base Case: <most likely scenario with price levels>
+Alt Scenario: <alternative path with trigger condition>
+Positioning Bias: <conditional bias - "Neutral-to-Long on X" or "Risk-Off pending Y">
+
+5) Confidence & Risk Flags
+Confidence: <0.50-0.85 based on signal strength>
+Risk Flags: <2-4 specific risks from: leverage proxy, low liquidity, weekend gap, macro uncertainty, correlation spike>
 
 STYLE RULES:
-- No emojis
-- No hype language
-- Hedge fund memo tone
-- Probabilistic language
-- No trading advice
-- No retail slang
+- No emojis, no hype language
+- Hedge fund research tone
+- Quantified statements (ratios, deltas, ranges)
+- Avoid predictions without conditional triggers
+- No generic AI disclaimers
 
-Keep total output under 800 characters."""
+Keep total output under 900 characters."""
 
         try:
             response = self.openai.chat.completions.create(
@@ -208,7 +237,7 @@ Keep total output under 800 characters."""
                     {"role": "user", "content": f"Analyze:\n\n{context}"}
                 ],
                 temperature=0.7,
-                max_tokens=600,
+                max_tokens=700,
                 timeout=30.0
             )
             
@@ -263,8 +292,14 @@ Keep total output under 800 characters."""
                 
                 intelligence = self.generate_intelligence(data, regime, trigger_reason)
                 
+                # Calculate volume anomaly for header
+                btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
+                btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
+                
                 timestamp = datetime.utcnow().strftime('%d %b %Y %H:%M UTC')
                 message = f"""<b>CRYPTO MARKET INTELLIGENCE</b>
+
+BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Volume anomaly: {btc_vol_ratio:.1f}x MA
 
 {intelligence}
 
