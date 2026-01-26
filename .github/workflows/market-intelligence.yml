@@ -4,7 +4,7 @@ name: Crypto Market Intelligence
 on:
   # 1. ПО РАСПИСАНИЮ (каждые 15 минут)
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '30 4 * * *'
   
   # 2. РУЧНОЙ ЗАПУСК
   workflow_dispatch:
