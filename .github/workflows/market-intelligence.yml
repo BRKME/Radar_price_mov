@@ -1,25 +1,37 @@
 name: Crypto Market Intelligence
+
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '0,15,30,45 * * * *'  # Более надежный формат
   workflow_dispatch:
   push:
     branches:
       - main
-concurrency:
-  group: market-intelligence
-  cancel-in-progress: false
+
+# Уберите concurrency для тестирования
+# concurrency:
+#   group: market-intelligence
+#   cancel-in-progress: false
+
 jobs:
   intelligence:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+    
     steps:
-      - name: Checkout
+      - name: Log schedule info
+        run: |
+          echo "🕒 Запуск по расписанию: ${{ github.event_name == 'schedule' }}"
+          echo "📅 Текущее время UTC: $(date -u)"
+          echo "🏷️ Event: ${{ github.event_name }}"
+      
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # Полная история для git операций
       
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -28,18 +40,43 @@ jobs:
           cache: 'pip'
       
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
       - name: Run Intelligence Engine
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python market_intelligence.py
-      
-      - name: Commit state
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add state.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update state" && git pull --rebase origin main && git push)
+          echo "🚀 Запуск скрипта..."
+          python market_intelligence.py
+          echo "✅ Скрипт завершен"
+      
+      - name: Commit and push changes
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📦 Проверяем изменения в state.json..."
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Проверяем есть ли изменения
+          if git status --porcelain | grep -q 'state.json'; then
+            echo "🔄 Обнаружены изменения, коммитим..."
+            git add state.json
+            git commit -m "🤖 Auto-update: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git pull --rebase origin main
+            git push origin main
+            echo "✅ Изменения закоммичены"
+          else
+            echo "⏭️ Изменений нет, пропускаем коммит"
+          fi
+      
+      - name: Notification on failure
+        if: failure()
+        run: |
+          echo "❌ Workflow завершился с ошибкой"
+          echo "Проверьте логи выше для диагностики"
