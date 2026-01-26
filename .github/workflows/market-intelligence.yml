@@ -3,6 +3,9 @@ on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
 concurrency:
   group: market-intelligence
   cancel-in-progress: false
