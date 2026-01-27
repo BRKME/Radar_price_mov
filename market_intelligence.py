@@ -101,21 +101,11 @@ class MarketIntelligence:
         btc_change = abs(data['btc']['change_24h'])
         eth_change = abs(data['eth']['change_24h'])
         
-        if btc_change > 2.0:
+        if btc_change > 3.0:
             triggers.append(f"BTC move {data['btc']['change_24h']:+.1f}%")
         
-        if eth_change > 2.0:
+        if eth_change > 3.0:
             triggers.append(f"ETH move {data['eth']['change_24h']:+.1f}%")
-        
-        btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
-        if btc_vol_ma > 0 and data['btc']['volume'] > btc_vol_ma * 2:
-            vol_ratio = data['btc']['volume'] / btc_vol_ma
-            triggers.append(f"BTC volume spike {vol_ratio:.1f}x MA")
-        
-        eth_vol_ma = self.calculate_volume_ma(data['eth']['df'])
-        if eth_vol_ma > 0 and data['eth']['volume'] > eth_vol_ma * 2:
-            vol_ratio = data['eth']['volume'] / eth_vol_ma
-            triggers.append(f"ETH volume spike {vol_ratio:.1f}x MA")
         
         return (len(triggers) > 0, ' | '.join(triggers))
     
@@ -158,86 +148,92 @@ class MarketIntelligence:
             return "Range-to-Trend Transition"
     
     def generate_intelligence(self, data: Dict, regime: str, trigger_reason: str) -> str:
-        spx_status = 'Market closed' if data['spx']['price'] is None else f"{data['spx']['change']:+.1f}% (daily)"
+        spx_status = 'closed' if data['spx']['price'] is None else 'open'
         
-        # Calculate volume anomaly ratio
+        # Calculate volume regime
         btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
         btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
         
         eth_vol_ma = self.calculate_volume_ma(data['eth']['df'])
         eth_vol_ratio = data['eth']['volume'] / eth_vol_ma if eth_vol_ma > 0 else 1.0
         
-        # Calculate ATR (Average True Range) for volatility
+        # Determine volume regime
+        if btc_vol_ratio < 2:
+            vol_regime = "Normal"
+        elif btc_vol_ratio < 5:
+            vol_regime = "Elevated"
+        elif btc_vol_ratio < 20:
+            vol_regime = "High"
+        else:
+            vol_regime = "Extreme"
+        
+        # Calculate ATR
         btc_df = data['btc']['df'].copy()
         btc_df['tr'] = btc_df[['high', 'low']].apply(lambda x: x['high'] - x['low'], axis=1)
         atr = btc_df['tr'].tail(14).mean()
         
-        context = f"""MARKET DATA:
+        context = f"""DATA:
 
-BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Volume anomaly: {btc_vol_ratio:.1f}x MA
+BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}%
 ETH: ${data['eth']['price']:,.0f} | 24h: {data['eth']['change_24h']:+.1f}%
-ETH Volume anomaly: {eth_vol_ratio:.1f}x MA
-
+BTC vol ratio: {btc_vol_ratio:.1f}x MA
+ETH vol ratio: {eth_vol_ratio:.1f}x MA
+Vol regime: {vol_regime}
+ATR(14): ${atr:,.0f}
 SPX: {spx_status}
-ATR (14): ${atr:,.0f}
+RSI: {data['btc']['rsi']:.0f}
 
-Classified Regime: {regime}
+Classified regime: {regime}
 Trigger: {trigger_reason}
 """
 
-        system_prompt = """You are an institutional-grade crypto market intelligence engine.
-Produce concise, quant-driven market briefs with actionable signals.
+        system_prompt = """Bloomberg Terminal Intelligence Engine.
 
 OUTPUT FORMAT (STRICT):
 
-1) Market Regime Classification
-Market Regime: <regime from user data>
-Drivers: <specific quant indicators from data - volume ratio, price action, ATR>
+Market Regime: [regime from data]
+Vol regime: [Normal/Elevated/High/Extreme]
 
-2) Price & Liquidity Snapshot
-Include only quant-relevant metrics. Format: 2-3 concise sentences with specific numbers.
-- BTC/ETH price deltas
-- Volume vs MA ratios
-- ATR / volatility context
-- Liquidity conditions (SPX status, session type)
+Liquidity Snapshot
+• BTC/ETH price deltas
+• Volume ratios vs MA
+• ATR context
+• SPX status
+• RSI levels
 
-3) Hard Signal Interpretation
-Replace generic macro with concrete hypotheses based on available data.
-Use probabilistic language. 3-4 sentences.
-Since you don't have OI/funding data, focus on:
-- Volume spike patterns (accumulation vs distribution)
-- Cross-asset correlation implications (SPX closed/open)
-- Price-volume divergences
-- Regime transition signals
+Hard Signals
+• Trend structure: [quantitative assessment]
+• Momentum: [UP/DOWN/FLAT based on RSI + price action]
+• Volume pattern: [accumulation/distribution/neutral based on price-volume divergence]
+• Volatility state: [expansion/compression based on ATR]
 
-4) Institutional Alpha Take
-Format:
-Base Case: <most likely scenario with price levels>
-Alt Scenario: <alternative path with trigger condition>
-Positioning Bias: <conditional bias - "Neutral-to-Long on X" or "Risk-Off pending Y">
+Alpha Take
+Base: [primary scenario with specific price levels]
+Alt: [alternative scenario with trigger condition]
+Bias: [Neutral/Long/Short on specific condition, e.g. "Long on break >90k with vol >2x"]
 
-5) Confidence & Risk Flags
-Confidence: <0.50-0.85 based on signal strength>
-Risk Flags: <2-4 specific risks from: leverage proxy, low liquidity, weekend gap, macro uncertainty, correlation spike>
+Risk Flags
+[List 2-4: Leverage proxy, Weekend liquidity, Thin SPX hours, Funding extreme proxy]
 
-STYLE RULES:
-- No emojis, no hype language
-- Hedge fund research tone
-- Quantified statements (ratios, deltas, ranges)
-- Avoid predictions without conditional triggers
-- No generic AI disclaimers
+STYLE:
+- Bullets only, no paragraphs
+- Terminal wire tone
+- No "suggests", "likely", "potentially"
+- No storytelling
+- Specific numbers and levels
+- Max 25 lines
 
-Keep total output under 900 characters."""
+Use concrete language: "BTC consolidating 88k-92k range" not "appears to be in a range"."""
 
         try:
             response = self.openai.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Analyze:\n\n{context}"}
+                    {"role": "user", "content": f"{context}"}
                 ],
-                temperature=0.7,
-                max_tokens=700,
+                temperature=0.6,
+                max_tokens=600,
                 timeout=30.0
             )
             
