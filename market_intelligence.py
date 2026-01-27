@@ -74,13 +74,13 @@ class MarketIntelligence:
                 'btc': {
                     'price': btc_ticker.get('last', btc_ticker.get('close', 0)),
                     'change_24h': btc_ticker.get('percentage', 0),
-                    'volume': btc_ticker.get('quoteVolume', btc_ticker.get('baseVolume', 0)),
+                    'volume': float(btc_df['volume'].iloc[-1]),  # Last hour volume
                     'df': btc_df
                 },
                 'eth': {
                     'price': eth_ticker.get('last', eth_ticker.get('close', 0)),
                     'change_24h': eth_ticker.get('percentage', 0),
-                    'volume': eth_ticker.get('quoteVolume', eth_ticker.get('baseVolume', 0)),
+                    'volume': float(eth_df['volume'].iloc[-1]),  # Last hour volume
                     'df': eth_df
                 },
                 'spx': {
@@ -187,43 +187,45 @@ Classified regime: {regime}
 Trigger: {trigger_reason}
 """
 
-        system_prompt = """Bloomberg Terminal Intelligence Engine.
+        system_prompt = """CRITICAL FORMAT RULES (FOLLOW EXACTLY):
+- NO numbered lists (1), 2), 3))
+- NO paragraphs or sentences - ONLY bullets (•)
+- NO "Confidence:" score
+- Terminal wire style - SHORT bullets only
 
-OUTPUT FORMAT (STRICT):
+OUTPUT STRUCTURE:
 
-Market Regime: [regime from data]
+Market Regime: [from data]
 Vol regime: [Normal/Elevated/High/Extreme]
 
 Liquidity Snapshot
-• BTC/ETH price deltas
-• Volume ratios vs MA
-• ATR context
-• SPX status
-• RSI levels
+• BTC: $XX,XXX (±X.X%)
+• ETH: $X,XXX (±X.X%)
+• Vol: X.Xx MA (BTC), X.Xx MA (ETH)
+• ATR: $XXX
+• SPX: open/closed
+• RSI: XX
 
 Hard Signals
-• Trend structure: [quantitative assessment]
-• Momentum: [UP/DOWN/FLAT based on RSI + price action]
-• Volume pattern: [accumulation/distribution/neutral based on price-volume divergence]
-• Volatility state: [expansion/compression based on ATR]
+• Trend: [range/bull/bear with levels]
+• Momentum: [UP/DOWN/FLAT]
+• Volume: [accumulation/distribution/neutral]
+• Volatility: [expansion/compression]
 
 Alpha Take
-Base: [primary scenario with specific price levels]
-Alt: [alternative scenario with trigger condition]
-Bias: [Neutral/Long/Short on specific condition, e.g. "Long on break >90k with vol >2x"]
+Base: [primary scenario + levels]
+Alt: [alternative + trigger]
+Bias: [Neutral/Long/Short on condition]
 
 Risk Flags
-[List 2-4: Leverage proxy, Weekend liquidity, Thin SPX hours, Funding extreme proxy]
+[List 2-4 specific risks]
 
 STYLE:
-- Bullets only, no paragraphs
-- Terminal wire tone
+- ONLY bullets (•), never numbered lists
+- No paragraphs, no full sentences after bullets
+- Short phrases: "BTC range 88k-92k" not "BTC is trading in a range between..."
 - No "suggests", "likely", "potentially"
-- No storytelling
-- Specific numbers and levels
-- Max 25 lines
-
-Use concrete language: "BTC consolidating 88k-92k range" not "appears to be in a range"."""
+- Concrete numbers only"""
 
         try:
             response = self.openai.chat.completions.create(
