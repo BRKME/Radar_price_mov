@@ -1,90 +1,45 @@
 name: Crypto Market Intelligence
-
-# ТРИГГЕРЫ - ОЧЕНЬ ВАЖНО ПРАВИЛЬНОЕ ФОРМАТИРОВАНИЕ
 on:
-  # 1. ПО РАСПИСАНИЮ (каждые 15 минут)
   schedule:
-    - cron: '30 4 * * *'
-  
-  # 2. РУЧНОЙ ЗАПУСК
+    - cron: '0 * * * *'  # Every hour at minute 0
   workflow_dispatch:
-  
-  # 3. ПРИ ПУШЕ В МАИН
   push:
     branches:
       - main
-
-# УБЕРИТЕ concurrency НА ВРЕМЯ ТЕСТА
-# concurrency:
-#   group: market-intelligence
-#   cancel-in-progress: false
-
+concurrency:
+  group: market-intelligence
+  cancel-in-progress: false
 jobs:
   intelligence:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      # Шаг 1: ОТЛАДОЧНАЯ ИНФОРМАЦИЯ О ТРИГГЕРЕ
-      - name: Show trigger information
-        run: |
-          echo "=========================================="
-          echo "🎯 WORKFLOW TRIGGERED BY: ${{ github.event_name }}"
-          echo "🕐 CURRENT UTC TIME: $(date -u '+%Y-%m-%d %H:%M:%S')"
-          echo "📊 GITHUB EVENT:"
-          echo "${{ toJson(github.event) }}" | jq . 2>/dev/null || echo "No JSON data"
-          echo "=========================================="
-          
-          # Сохраняем информацию о запуске в файл
-          echo "Last run: $(date -u)" > last_run.txt
-          echo "Trigger: ${{ github.event_name }}" >> last_run.txt
-          echo "Repository: ${{ github.repository }}" >> last_run.txt
-      
-      # Шаг 2: Проверка типа события
-      - name: Check event type
-        run: |
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "✅✅✅ ЗАПУЩЕНО ПО РАСПИСАНИЮ ✅✅✅"
-            echo "Следующий запуск через 15 минут"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "👆 РУЧНОЙ ЗАПУСК"
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "📤 ЗАПУЩЕНО ЧЕРЕЗ PUSH"
-          else
-            echo "❓ НЕИЗВЕСТНЫЙ ТРИГГЕР: ${{ github.event_name }}"
-          fi
-      
-      # Шаг 3: Checkout кода
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       
-      # Шаг 4: Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      # Шаг 5: Установка зависимостей
       - name: Install dependencies
-        run: |
-          echo "Installing Python dependencies..."
-          pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+        run: pip install -r requirements.txt
       
-      # Шаг 6: Запуск скрипта
-      - name: Run market intelligence
+      - name: Run Intelligence Engine
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python market_intelligence.py
       
-      # Шаг 7: Сохраняем результаты
-      - name: Save run info
+      - name: Commit state
         run: |
-          echo "Workflow completed at: $(date -u)" >> workflow_log.txt
-          echo "Status: SUCCESS" >> workflow_log.txt
-          cat workflow_log.txt
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add state.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update state" && git pull --rebase origin main && git push)
