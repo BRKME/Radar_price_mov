@@ -68,8 +68,13 @@ class MarketIntelligence:
             btc_df = pd.DataFrame(btc_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             eth_df = pd.DataFrame(eth_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            spx = yf.download('^GSPC', period='5d', progress=False)
-            if len(spx) >= 2:
+            spx = None
+            try:
+                spx = yf.download('^GSPC', period='5d', progress=False)
+            except Exception as e:
+                logger.warning(f"SPX download failed: {e}")
+            
+            if spx is not None and len(spx) >= 2:
                 spx_price = float(spx['Close'].iloc[-1])
                 spx_change = ((spx_price / float(spx['Close'].iloc[-2])) - 1) * 100
             else:
@@ -101,6 +106,20 @@ class MarketIntelligence:
     
     def calculate_volume_ma(self, df: pd.DataFrame, period: int = 20) -> float:
         return df['volume'].tail(period).mean()
+    
+    def enrich_data_with_indicators(self, data: Dict) -> Dict:
+        """Add technical indicators to data"""
+        btc_df = data['btc']['df'].copy()
+        
+        if len(btc_df) < 14:
+            logger.warning(f"Insufficient data for RSI: {len(btc_df)} candles")
+            data['btc']['rsi'] = 50.0  # Default fallback
+        else:
+            btc_df['close'] = pd.to_numeric(btc_df['close'])
+            rsi_series = ta.momentum.RSIIndicator(close=btc_df['close'], window=14).rsi()
+            data['btc']['rsi'] = rsi_series.iloc[-1] if not pd.isna(rsi_series.iloc[-1]) else 50.0
+        
+        return data
     
     def check_triggers(self, data: Dict) -> Tuple[bool, str]:
         triggers = []
@@ -299,6 +318,7 @@ STYLE:
             logger.info("Starting Market Intelligence scan")
             
             data = self.fetch_market_data()
+            data = self.enrich_data_with_indicators(data)  # Add RSI and other indicators
             regime = self.classify_regime(data)
             should_publish, trigger_reason = self.check_triggers(data)
             
