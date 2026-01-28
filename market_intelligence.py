@@ -59,6 +59,12 @@ class MarketIntelligence:
             btc_ohlcv = self.exchange.fetch_ohlcv('BTC/USD', '1h', limit=48)
             eth_ohlcv = self.exchange.fetch_ohlcv('ETH/USD', '1h', limit=48)
             
+            # P0 Fix: Validate minimum data length
+            if len(btc_ohlcv) < 20:
+                raise ValueError(f"Insufficient BTC data: {len(btc_ohlcv)} candles, need ≥20")
+            if len(eth_ohlcv) < 20:
+                raise ValueError(f"Insufficient ETH data: {len(eth_ohlcv)} candles, need ≥20")
+            
             btc_df = pd.DataFrame(btc_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             eth_df = pd.DataFrame(eth_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
@@ -70,17 +76,18 @@ class MarketIntelligence:
                 spx_price = None
                 spx_change = 0
             
+            # P0 Fix: Handle None percentage from Kraken
             return {
                 'btc': {
                     'price': btc_ticker.get('last', btc_ticker.get('close', 0)),
-                    'change_24h': btc_ticker.get('percentage', 0),
-                    'volume': float(btc_df['volume'].iloc[-1]),  # Last hour volume
+                    'change_24h': btc_ticker.get('percentage') or 0.0,
+                    'volume': float(btc_df['volume'].iloc[-1]),
                     'df': btc_df
                 },
                 'eth': {
                     'price': eth_ticker.get('last', eth_ticker.get('close', 0)),
-                    'change_24h': eth_ticker.get('percentage', 0),
-                    'volume': float(eth_df['volume'].iloc[-1]),  # Last hour volume
+                    'change_24h': eth_ticker.get('percentage') or 0.0,
+                    'volume': float(eth_df['volume'].iloc[-1]),
                     'df': eth_df
                 },
                 'spx': {
@@ -111,6 +118,11 @@ class MarketIntelligence:
     
     def classify_regime(self, data: Dict) -> str:
         btc_df = data['btc']['df'].copy()
+        
+        # P0 Fix: Validate data length before processing
+        if len(btc_df) < 14:
+            raise ValueError(f"Insufficient data for RSI: {len(btc_df)} candles, need ≥14")
+        
         btc_df['close'] = pd.to_numeric(btc_df['close'])
         
         price = btc_df['close'].iloc[-1]
@@ -152,10 +164,19 @@ class MarketIntelligence:
         
         # Calculate volume regime
         btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
-        btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
+        # P0 Fix: Better handling of zero volume MA
+        if btc_vol_ma > 0:
+            btc_vol_ratio = data['btc']['volume'] / btc_vol_ma
+        else:
+            logger.warning("BTC volume MA is zero, using volume directly")
+            btc_vol_ratio = 1.0  # Fallback for display only
         
         eth_vol_ma = self.calculate_volume_ma(data['eth']['df'])
-        eth_vol_ratio = data['eth']['volume'] / eth_vol_ma if eth_vol_ma > 0 else 1.0
+        if eth_vol_ma > 0:
+            eth_vol_ratio = data['eth']['volume'] / eth_vol_ma
+        else:
+            logger.warning("ETH volume MA is zero, using volume directly")
+            eth_vol_ratio = 1.0  # Fallback for display only
         
         # Determine volume regime
         if btc_vol_ratio < 2:
@@ -248,6 +269,12 @@ STYLE:
             logger.error(f"OpenAI API error: {e}")
             raise
     
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((requests.exceptions.RequestException,)),
+        reraise=True
+    )
     def publish_telegram(self, message: str):
         try:
             if len(message) > 4096:
@@ -262,7 +289,7 @@ STYLE:
             }
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
-            logger.info("Published to Telegram")
+            logger.info("Published to Telegram successfully")
         except Exception as e:
             logger.error(f"Telegram error: {e}")
             raise
@@ -277,13 +304,29 @@ STYLE:
             
             regime_changed = regime != self.state.get('last_regime')
             
+            # P2 Fix: Add cooldown for regime shifts (4 hours)
             if regime_changed:
-                logger.info(f"Regime shift: {self.state.get('last_regime')} -> {regime}")
-                should_publish = True
-                if trigger_reason:
-                    trigger_reason += " | Regime shift"
-                else:
-                    trigger_reason = "Regime shift"
+                last_regime_publish = self.state.get('last_regime_publish')
+                regime_cooldown = 4 * 3600  # 4 hours in seconds
+                
+                cooldown_active = False
+                if last_regime_publish:
+                    try:
+                        last_time = datetime.fromisoformat(last_regime_publish)
+                        elapsed = (datetime.utcnow() - last_time).total_seconds()
+                        if elapsed < regime_cooldown:
+                            cooldown_active = True
+                            logger.info(f"Regime shift detected but cooldown active ({elapsed/3600:.1f}h elapsed, need 4h)")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse last_regime_publish: {e}")
+                
+                if not cooldown_active:
+                    logger.info(f"Regime shift: {self.state.get('last_regime')} -> {regime}")
+                    should_publish = True
+                    if trigger_reason:
+                        trigger_reason += " | Regime shift"
+                    else:
+                        trigger_reason = "Regime shift"
             
             if should_publish:
                 logger.info(f"Publishing: {trigger_reason}")
@@ -303,10 +346,15 @@ BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol
 
 <i>Radar | {timestamp}</i>"""
                 
+                # P1 Fix: Publish first, then update state only on success
                 self.publish_telegram(message)
+                logger.info("Telegram publish confirmed")
                 
+                # Update state AFTER successful publish
                 self.state['last_regime'] = regime
                 self.state['last_publish'] = datetime.utcnow().isoformat()
+                if regime_changed:
+                    self.state['last_regime_publish'] = datetime.utcnow().isoformat()
                 
                 try:
                     self._save_state()
@@ -319,6 +367,7 @@ BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol
             else:
                 logger.info(f"No significant triggers. Regime: {regime}")
                 
+                # Update regime even when not publishing
                 self.state['last_regime'] = regime
                 
                 try:
