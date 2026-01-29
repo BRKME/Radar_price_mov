@@ -318,29 +318,33 @@ STYLE:
             
             regime_changed = regime != self.state.get('last_regime')
             
-            # P2 Fix: Add cooldown for regime shifts (4 hours)
             if regime_changed:
-                last_regime_publish = self.state.get('last_regime_publish')
-                regime_cooldown = 4 * 3600  # 4 hours in seconds
+                logger.info(f"Regime shift: {self.state.get('last_regime')} -> {regime}")
+                if not should_publish:
+                    should_publish = True
+                    trigger_reason = "Regime shift"
+                else:
+                    trigger_reason += " | Regime shift"
+            
+            # Global cooldown: 6 hours between ANY publications
+            if should_publish:
+                last_publish = self.state.get('last_publish')
+                cooldown = 6 * 3600  # 6 hours in seconds
                 
                 cooldown_active = False
-                if last_regime_publish:
+                if last_publish:
                     try:
-                        last_time = datetime.fromisoformat(last_regime_publish)
+                        last_time = datetime.fromisoformat(last_publish)
                         elapsed = (datetime.utcnow() - last_time).total_seconds()
-                        if elapsed < regime_cooldown:
+                        if elapsed < cooldown:
                             cooldown_active = True
-                            logger.info(f"Regime shift detected but cooldown active ({elapsed/3600:.1f}h elapsed, need 4h)")
+                            hours_elapsed = elapsed / 3600
+                            hours_remaining = (cooldown - elapsed) / 3600
+                            logger.info(f"Trigger detected ({trigger_reason}) but cooldown active: {hours_elapsed:.1f}h elapsed, {hours_remaining:.1f}h remaining")
                     except (ValueError, TypeError) as e:
-                        logger.warning(f"Could not parse last_regime_publish: {e}")
+                        logger.warning(f"Could not parse last_publish: {e}")
                 
-                if not cooldown_active:
-                    logger.info(f"Regime shift: {self.state.get('last_regime')} -> {regime}")
-                    should_publish = True
-                    if trigger_reason:
-                        trigger_reason += " | Regime shift"
-                    else:
-                        trigger_reason = "Regime shift"
+                should_publish = not cooldown_active
             
             if should_publish:
                 logger.info(f"Publishing: {trigger_reason}")
@@ -367,8 +371,6 @@ BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol
                 # Update state AFTER successful publish
                 self.state['last_regime'] = regime
                 self.state['last_publish'] = datetime.utcnow().isoformat()
-                if regime_changed:
-                    self.state['last_regime_publish'] = datetime.utcnow().isoformat()
                 
                 try:
                     self._save_state()
