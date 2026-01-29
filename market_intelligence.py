@@ -352,13 +352,13 @@ STYLE:
                 btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
                 
                 timestamp = datetime.utcnow().strftime('%d %b %Y %H:%M UTC')
-                message = f"""CRYPTO MARKET INTELLIGENCE 📊
+                message = f"""CRYPTO MARKET INTELLIGENCE
 
 BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol: {btc_vol_ratio:.1f}x MA
 
 {intelligence}
 
-<i>🎯 Radar | {timestamp}</i>"""
+<i>Radar | {timestamp}</i>"""
                 
                 # P1 Fix: Publish first, then update state only on success
                 self.publish_telegram(message)
