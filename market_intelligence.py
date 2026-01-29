@@ -207,7 +207,7 @@ class MarketIntelligence:
         else:
             vol_regime = "Extreme"
         
-        # Calculate ATR
+        # Calculate ATR for internal use only (not shown to user)
         btc_df = data['btc']['df'].copy()
         btc_df['tr'] = btc_df[['high', 'low']].apply(lambda x: x['high'] - x['low'], axis=1)
         atr = btc_df['tr'].tail(14).mean()
@@ -219,8 +219,6 @@ ETH: ${data['eth']['price']:,.0f} | 24h: {data['eth']['change_24h']:+.1f}%
 BTC vol ratio: {btc_vol_ratio:.1f}x MA
 ETH vol ratio: {eth_vol_ratio:.1f}x MA
 Vol regime: {vol_regime}
-ATR(14): ${atr:,.0f}
-SPX: {spx_status}
 RSI: {data['btc']['rsi']:.0f}
 
 Classified regime: {regime}
@@ -230,42 +228,38 @@ Trigger: {trigger_reason}
         system_prompt = """CRITICAL FORMAT RULES (FOLLOW EXACTLY):
 - NO numbered lists (1), 2), 3))
 - NO paragraphs or sentences - ONLY bullets (•)
-- NO "Confidence:" score
+- Add emojis for visual appeal
 - Terminal wire style - SHORT bullets only
 
 OUTPUT STRUCTURE:
 
-Market Regime: [from data]
+Market Regime: [from data] 📈/📉
 Vol regime: [Normal/Elevated/High/Extreme]
 
-Liquidity Snapshot
+💧 Liquidity Snapshot
 • BTC: $XX,XXX (±X.X%)
-• ETH: $X,XXX (±X.X%)
+• ETH: $X,XXX (±X.X%)  
 • Vol: X.Xx MA (BTC), X.Xx MA (ETH)
-• ATR: $XXX
-• SPX: open/closed
 • RSI: XX
 
-Hard Signals
+🎯 Hard Signals
 • Trend: [range/bull/bear with levels]
 • Momentum: [UP/DOWN/FLAT]
 • Volume: [accumulation/distribution/neutral]
 • Volatility: [expansion/compression]
 
-Alpha Take
+💡 Alpha Take
 Base: [primary scenario + levels]
 Alt: [alternative + trigger]
 Bias: [Neutral/Long/Short on condition]
 
-Risk Flags
-[List 2-4 specific risks]
-
 STYLE:
 - ONLY bullets (•), never numbered lists
-- No paragraphs, no full sentences after bullets
-- Short phrases: "BTC range 88k-92k" not "BTC is trading in a range between..."
+- No paragraphs
+- Short phrases: "BTC range 88k-92k" not "BTC is trading in a range..."
 - No "suggests", "likely", "potentially"
-- Concrete numbers only"""
+- Concrete numbers only
+- Use emojis for sections (💧 💎 🎯 💡 ⚠️ 🔥 📊 etc)"""
 
         try:
             response = self.openai.chat.completions.create(
@@ -358,13 +352,13 @@ STYLE:
                 btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
                 
                 timestamp = datetime.utcnow().strftime('%d %b %Y %H:%M UTC')
-                message = f"""<b>CRYPTO MARKET INTELLIGENCE</b>
+                message = f"""CRYPTO MARKET INTELLIGENCE 📊
 
-BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Volume anomaly: {btc_vol_ratio:.1f}x MA
+BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol: {btc_vol_ratio:.1f}x MA
 
 {intelligence}
 
-<i>Radar | {timestamp}</i>"""
+<i>🎯 Radar | {timestamp}</i>"""
                 
                 # P1 Fix: Publish first, then update state only on success
                 self.publish_telegram(message)
