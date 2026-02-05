@@ -10,7 +10,6 @@ import yfinance as yf
 import pandas as pd
 import ta
 import requests
-from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,14 +21,12 @@ class MarketIntelligence:
     def __init__(self):
         self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
-        self.openai_api_key = os.getenv('OPENAI_API_KEY')
         
-        if not all([self.telegram_token, self.channel_id, self.openai_api_key]):
+        if not all([self.telegram_token, self.channel_id]):
             logger.error("Missing required environment variables")
             sys.exit(1)
         
         self.exchange = ccxt.kraken()
-        self.openai = OpenAI(api_key=self.openai_api_key)
         self.state = self._load_state()
     
     def _load_state(self) -> Dict:
@@ -182,117 +179,6 @@ class MarketIntelligence:
         else:
             return "Range-to-Trend Transition"
     
-    def generate_intelligence(self, data: Dict, regime: str, trigger_reason: str) -> str:
-        spx_status = 'closed' if data['spx']['price'] is None else 'open'
-        
-        # Calculate volume regime
-        btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
-        # P0 Fix: Better handling of zero volume MA
-        if btc_vol_ma > 0:
-            btc_vol_ratio = data['btc']['volume'] / btc_vol_ma
-        else:
-            logger.warning("BTC volume MA is zero, using volume directly")
-            btc_vol_ratio = 1.0  # Fallback for display only
-        
-        eth_vol_ma = self.calculate_volume_ma(data['eth']['df'])
-        if eth_vol_ma > 0:
-            eth_vol_ratio = data['eth']['volume'] / eth_vol_ma
-        else:
-            logger.warning("ETH volume MA is zero, using volume directly")
-            eth_vol_ratio = 1.0  # Fallback for display only
-        
-        # Determine volume regime
-        if btc_vol_ratio < 2:
-            vol_regime = "Normal"
-        elif btc_vol_ratio < 5:
-            vol_regime = "Elevated"
-        elif btc_vol_ratio < 20:
-            vol_regime = "High"
-        else:
-            vol_regime = "Extreme"
-        
-        # Calculate ATR for internal use only (not shown to user)
-        btc_df = data['btc']['df'].copy()
-        btc_df['tr'] = btc_df[['high', 'low']].apply(lambda x: x['high'] - x['low'], axis=1)
-        atr = btc_df['tr'].tail(14).mean()
-        
-        context = f"""DATA:
-
-BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}%
-ETH: ${data['eth']['price']:,.0f} | 24h: {data['eth']['change_24h']:+.1f}%
-BTC vol ratio: {btc_vol_ratio:.1f}x MA
-ETH vol ratio: {eth_vol_ratio:.1f}x MA
-Vol regime: {vol_regime}
-RSI: {data['btc']['rsi']:.0f}
-
-Classified regime: {regime}
-Trigger: {trigger_reason}
-"""
-        
-        system_prompt = """CRITICAL FORMAT RULES (FOLLOW EXACTLY):
-- Write for regular person, not professional trader
-- Simple clear English
-- NO numbered lists (1), 2), 3))
-- ONLY bullets (•)
-- Add emojis for visual appeal
-- CRITICAL: Use ONLY plain text and emojis - NO HTML tags at all
-
-OUTPUT STRUCTURE:
-
-Market Regime: [from data] 📈/📉
-Vol regime: [Normal/Elevated/High/Extreme]
-
-💧 Snapshot
-• BTC: $XX,XXX (±X.X%)
-• ETH: $X,XXX (±X.X%)  
-• RSI: XX (oversold <30, overbought >70)
-
-💡 What's Next
-• [Simple prediction where price going]
-• [Key price levels to watch]
-• [Risk or opportunity in plain words]
-
-STYLE:
-- Simple English, no jargon
-- Say "falling" not "distribution breakdown"
-- Say "going down" not "momentum DOWN"
-- Say "selling pressure" not "bear continuation"
-- Concrete prices: "BTC heading to $70k"
-- Short bullets (5-8 words max)
-- Use emojis (💧 💡 📊 📈 📉 🔥 ⚠️)
-- NO HTML TAGS - plain text only"""
-        
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": context}
-                ],
-                max_tokens=500,
-                temperature=0.7
-            )
-            
-            intelligence = response.choices[0].message.content.strip()
-            
-            # Sanitize HTML - remove all HTML tags except Telegram allowed ones
-            # For now just remove all < > to prevent any HTML
-            intelligence = intelligence.replace('<', '&lt;').replace('>', '&gt;')
-            
-            return intelligence
-            
-        except Exception as e:
-            logger.error(f"OpenAI API error: {e}")
-            return f"""Market Regime: {regime}
-Vol regime: {vol_regime}
-
-💧 Snapshot
-• BTC: ${data['btc']['price']:,.0f} ({data['btc']['change_24h']:+.1f}%)
-• ETH: ${data['eth']['price']:,.0f} ({data['eth']['change_24h']:+.1f}%)
-• RSI: {data['btc']['rsi']:.0f}
-
-Trigger: {trigger_reason}"""
-    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -407,18 +293,23 @@ Trigger: {trigger_reason}"""
             if should_publish:
                 logger.info(f"Publishing: {trigger_reason}")
                 
-                intelligence = self.generate_intelligence(data, regime, trigger_reason)
-                
                 # Calculate volume anomaly for header
                 btc_vol_ma = self.calculate_volume_ma(data['btc']['df'])
                 btc_vol_ratio = data['btc']['volume'] / btc_vol_ma if btc_vol_ma > 0 else 1.0
                 
+                # Choose emoji based on regime
+                regime_emoji = "🟢" if "Bull" in regime else "🔴"
+                
                 timestamp = datetime.utcnow().strftime('%d %b %Y %H:%M UTC')
                 message = f"""CRYPTO MARKET INTELLIGENCE
 
-BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol: {btc_vol_ratio:.1f}x MA
+Regime: {regime_emoji} {regime}
+• BTC: ${data['btc']['price']:,.0f} ({data['btc']['change_24h']:+.1f}%)
+• ETH: ${data['eth']['price']:,.0f} ({data['eth']['change_24h']:+.1f}%)
+• RSI: {data['btc']['rsi']:.0f}
+• Vol: {btc_vol_ratio:.1f}x MA
 
-{intelligence}
+Trigger: {trigger_reason}
 
 <i>Radar | {timestamp}</i>"""
                 
