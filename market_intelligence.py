@@ -226,40 +226,35 @@ Trigger: {trigger_reason}
 """
 
         system_prompt = """CRITICAL FORMAT RULES (FOLLOW EXACTLY):
+- Write for regular person, not professional trader
+- Simple clear English
 - NO numbered lists (1), 2), 3))
-- NO paragraphs or sentences - ONLY bullets (•)
+- ONLY bullets (•)
 - Add emojis for visual appeal
-- Terminal wire style - SHORT bullets only
 
 OUTPUT STRUCTURE:
 
 Market Regime: [from data] 📈/📉
 Vol regime: [Normal/Elevated/High/Extreme]
 
-💧 Liquidity Snapshot
+💧 Snapshot
 • BTC: $XX,XXX (±X.X%)
 • ETH: $X,XXX (±X.X%)  
-• Vol: X.Xx MA (BTC), X.Xx MA (ETH)
-• RSI: XX
+• RSI: XX (oversold <30, overbought >70)
 
-🎯 Hard Signals
-• Trend: [range/bull/bear with levels]
-• Momentum: [UP/DOWN/FLAT]
-• Volume: [accumulation/distribution/neutral]
-• Volatility: [expansion/compression]
-
-💡 Alpha Take
-Base: [primary scenario + levels]
-Alt: [alternative + trigger]
-Bias: [Neutral/Long/Short on condition]
+💡 What's Next
+• [Simple prediction where price going]
+• [Key price levels to watch]
+• [Risk or opportunity in plain words]
 
 STYLE:
-- ONLY bullets (•), never numbered lists
-- No paragraphs
-- Short phrases: "BTC range 88k-92k" not "BTC is trading in a range..."
-- No "suggests", "likely", "potentially"
-- Concrete numbers only
-- Use emojis for sections (💧 💎 🎯 💡 ⚠️ 🔥 📊 etc)"""
+- Simple English, no jargon
+- Say "falling" not "distribution breakdown"
+- Say "going down" not "momentum DOWN"
+- Say "selling pressure" not "bear continuation"
+- Concrete prices: "BTC heading to $70k"
+- Short bullets (5-8 words max)
+- Use emojis (💧 💡 📊 📈 📉 🔥 ⚠️)"""
 
         try:
             response = self.openai.chat.completions.create(
