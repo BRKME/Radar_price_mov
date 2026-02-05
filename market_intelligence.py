@@ -228,13 +228,14 @@ RSI: {data['btc']['rsi']:.0f}
 Classified regime: {regime}
 Trigger: {trigger_reason}
 """
-
+        
         system_prompt = """CRITICAL FORMAT RULES (FOLLOW EXACTLY):
 - Write for regular person, not professional trader
 - Simple clear English
 - NO numbered lists (1), 2), 3))
 - ONLY bullets (•)
 - Add emojis for visual appeal
+- CRITICAL: Use ONLY plain text and emojis - NO HTML tags at all
 
 OUTPUT STRUCTURE:
 
@@ -258,28 +259,39 @@ STYLE:
 - Say "selling pressure" not "bear continuation"
 - Concrete prices: "BTC heading to $70k"
 - Short bullets (5-8 words max)
-- Use emojis (💧 💡 📊 📈 📉 🔥 ⚠️)"""
-
+- Use emojis (💧 💡 📊 📈 📉 🔥 ⚠️)
+- NO HTML TAGS - plain text only"""
+        
         try:
-            response = self.openai.chat.completions.create(
-                model="gpt-4o",
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"{context}"}
+                    {"role": "user", "content": context}
                 ],
-                temperature=0.6,
-                max_tokens=600,
-                timeout=30.0
+                max_tokens=500,
+                temperature=0.7
             )
             
-            if not response.choices or len(response.choices) == 0:
-                raise ValueError("OpenAI returned empty choices")
+            intelligence = response.choices[0].message.content.strip()
             
-            return response.choices[0].message.content.strip()
+            # Sanitize HTML - remove all HTML tags except Telegram allowed ones
+            # For now just remove all < > to prevent any HTML
+            intelligence = intelligence.replace('<', '&lt;').replace('>', '&gt;')
+            
+            return intelligence
             
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
-            raise
+            return f"""Market Regime: {regime}
+Vol regime: {vol_regime}
+
+💧 Snapshot
+• BTC: ${data['btc']['price']:,.0f} ({data['btc']['change_24h']:+.1f}%)
+• ETH: ${data['eth']['price']:,.0f} ({data['eth']['change_24h']:+.1f}%)
+• RSI: {data['btc']['rsi']:.0f}
+
+Trigger: {trigger_reason}"""
     
     @retry(
         stop=stop_after_attempt(3),
@@ -293,6 +305,9 @@ STYLE:
                 logger.warning(f"Message too long ({len(message)} chars), truncating")
                 message = message[:4090] + "\n..."
             
+            # Log message for debugging
+            logger.info(f"Telegram message ({len(message)} chars):\n{message}")
+            
             url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
             payload = {
                 'chat_id': self.channel_id,
@@ -302,6 +317,12 @@ STYLE:
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             logger.info("Published to Telegram successfully")
+        except requests.exceptions.HTTPError as e:
+            # Log response for 400 errors
+            if e.response.status_code == 400:
+                logger.error(f"Telegram 400 error. Response: {e.response.text}")
+            logger.error(f"Telegram error: {e}")
+            raise
         except Exception as e:
             logger.error(f"Telegram error: {e}")
             raise
