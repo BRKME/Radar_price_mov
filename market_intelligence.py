@@ -107,6 +107,10 @@ class MarketIntelligence:
     def calculate_volume_ma(self, df: pd.DataFrame, period: int = 20) -> float:
         return df['volume'].tail(period).mean()
     
+    def get_round_level(self, price: float) -> int:
+        """Get nearest 5k round level"""
+        return round(price / 5000) * 5000
+    
     def enrich_data_with_indicators(self, data: Dict) -> Dict:
         """Add technical indicators to data"""
         btc_df = data['btc']['df'].copy()
@@ -307,7 +311,7 @@ STYLE:
             logger.info("Starting Market Intelligence scan")
             
             data = self.fetch_market_data()
-            data = self.enrich_data_with_indicators(data)  # Add RSI and other indicators
+            data = self.enrich_data_with_indicators(data)
             regime = self.classify_regime(data)
             should_publish, trigger_reason = self.check_triggers(data)
             
@@ -320,6 +324,44 @@ STYLE:
                     trigger_reason = "Regime shift"
                 else:
                     trigger_reason += " | Regime shift"
+            
+            # Check round level cross (70k, 75k, 80k, 85k...)
+            current_level = self.get_round_level(data['btc']['price'])
+            last_level = self.state.get('last_round_level')
+            
+            if last_level and current_level != last_level:
+                direction = "above" if current_level > last_level else "below"
+                round_trigger = f"BTC crossed {direction} ${current_level:,.0f}"
+                
+                # Apply 4h cooldown for round level triggers
+                last_round_publish = self.state.get('last_round_publish')
+                round_cooldown = 4 * 3600  # 4 hours
+                
+                round_cooldown_active = False
+                if last_round_publish:
+                    try:
+                        last_time = datetime.fromisoformat(last_round_publish)
+                        elapsed = (datetime.utcnow() - last_time).total_seconds()
+                        if elapsed < round_cooldown:
+                            round_cooldown_active = True
+                            logger.info(f"Round level trigger ({round_trigger}) but cooldown active: {elapsed/3600:.1f}h elapsed")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse last_round_publish: {e}")
+                
+                if not round_cooldown_active:
+                    logger.info(f"Round level crossed: ${last_level:,.0f} -> ${current_level:,.0f}")
+                    if not should_publish:
+                        should_publish = True
+                        trigger_reason = round_trigger
+                    else:
+                        trigger_reason += f" | {round_trigger}"
+                    
+                    # Mark that round trigger fired
+                    round_trigger_fired = True
+                else:
+                    round_trigger_fired = False
+            else:
+                round_trigger_fired = False
             
             # Global cooldown: 6 hours between ANY publications
             if should_publish:
@@ -366,6 +408,9 @@ BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol
                 # Update state AFTER successful publish
                 self.state['last_regime'] = regime
                 self.state['last_publish'] = datetime.utcnow().isoformat()
+                self.state['last_round_level'] = current_level
+                if round_trigger_fired:
+                    self.state['last_round_publish'] = datetime.utcnow().isoformat()
                 
                 try:
                     self._save_state()
@@ -378,8 +423,9 @@ BTC: ${data['btc']['price']:,.0f} | 24h: {data['btc']['change_24h']:+.1f}% | Vol
             else:
                 logger.info(f"No significant triggers. Regime: {regime}")
                 
-                # Update regime even when not publishing
+                # Update regime and round level even when not publishing
                 self.state['last_regime'] = regime
+                self.state['last_round_level'] = current_level
                 
                 try:
                     self._save_state()
