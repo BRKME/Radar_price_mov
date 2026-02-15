@@ -615,6 +615,10 @@ class MarketIntelligence:
 Confidence: {regime_data['confidence']}%
 Tail risk: {tail_display}
 
+<b>Prices</b>
+• BTC: ${data['btc']['price']:,.0f} ({data['btc']['change_24h']:+.1f}% 24h | {data['btc']['change_7d']:+.1f}% 7d)
+• ETH: ${data['eth']['price']:,.0f} ({data['eth']['change_24h']:+.1f}% 24h)
+
 <b>Interpretation</b>
 {interpretation_text}
 
