@@ -337,6 +337,132 @@ class MarketIntelligence:
             'score': score
         }
     
+    def _build_interpretation(self, data: Dict, regime_data: Dict, vol_ratio: float) -> list:
+        """
+        Build human-readable interpretation that explains WHY the regime is what it is.
+        Resolves cognitive conflicts (e.g., why BEAR when price is up).
+        """
+        lines = []
+        regime = regime_data['regime_base']
+        rsi = data['btc'].get('rsi', 50)
+        change_24h = data['btc'].get('change_24h', 0)
+        change_7d = data['btc'].get('change_7d', 0)
+        above_ema20 = data['btc'].get('above_ema20', True)
+        above_ema50 = data['btc'].get('above_ema50', True)
+        
+        # Main structure statement
+        if regime == "BULL":
+            if above_ema20 and above_ema50:
+                lines.append("Price structure remains bullish")
+            else:
+                lines.append("Trend turning bullish")
+        elif regime == "BEAR":
+            if not above_ema20 and not above_ema50:
+                lines.append("Price structure remains bearish")
+            else:
+                lines.append("Trend turning bearish")
+        else:
+            lines.append("No clear trend direction")
+        
+        # Resolve conflict: BEAR but short-term up
+        if regime == "BEAR" and change_24h > 0:
+            if vol_ratio < 0.7:
+                lines.append("Short-term bounce lacks volume")
+            else:
+                lines.append("Short-term bounce within downtrend")
+        
+        # Resolve conflict: BULL but short-term down
+        if regime == "BULL" and change_24h < 0:
+            if vol_ratio < 0.7:
+                lines.append("Pullback on low volume (healthy)")
+            else:
+                lines.append("Pullback within uptrend")
+        
+        # RSI context in relation to regime
+        if regime == "BEAR" and rsi < 40:
+            lines.append("Momentum confirms weakness")
+        elif regime == "BEAR" and rsi > 50:
+            lines.append("Momentum diverging — watch for reversal")
+        elif regime == "BULL" and rsi > 60:
+            lines.append("Momentum confirms strength")
+        elif regime == "BULL" and rsi < 45:
+            lines.append("Momentum lagging — needs confirmation")
+        
+        # Volume context
+        if vol_ratio < 0.5:
+            lines.append("Activity unusually low")
+        elif vol_ratio > 2.0:
+            lines.append("Elevated activity — institutional interest")
+        
+        # Tail risk explanation
+        if regime_data['tail_risk'] == "ACTIVE":
+            if regime == "BULL":
+                lines.append("Overextension risk present")
+            else:
+                lines.append("Capitulation risk elevated")
+        
+        return lines[:4]  # Max 4 lines for readability
+    
+    def _build_implication(self, regime_data: Dict, data: Dict) -> str:
+        """
+        Build the "so what" — what this regime means for action.
+        This is the key UX element that answers "what should I do?"
+        """
+        regime = regime_data['regime_base']
+        tail_risk = regime_data['tail_risk']
+        confidence = regime_data['confidence']
+        change_24h = data['btc'].get('change_24h', 0)
+        
+        if regime == "BULL":
+            if tail_risk == "ACTIVE":
+                return "Uptrend intact but stretched.\nNew longs risky here — wait for pullback."
+            elif confidence >= 50:
+                return "Bullish structure favors dips as buying opportunities.\nTrend is your friend."
+            else:
+                return "Early bull signal — confirmation needed.\nReduce size until structure solidifies."
+        
+        elif regime == "BEAR":
+            if tail_risk == "ACTIVE":
+                return "Downtrend may be exhausted.\nNot the time to initiate shorts."
+            elif change_24h > 0:
+                return "This is NOT a trend reversal.\nRallies are corrective, not structural."
+            elif confidence >= 50:
+                return "Bearish structure favors rallies as selling opportunities.\nCapital preservation priority."
+            else:
+                return "Early bear signal — could be noise.\nAvoid aggressive positioning."
+        
+        else:  # TRANSITION
+            return "No clear edge in either direction.\nWait for regime clarity before positioning."
+    
+    def _format_trigger_for_humans(self, trigger_reason: str) -> str:
+        """
+        Convert internal trigger format to human-readable text.
+        """
+        # Regime shift formatting
+        if "→" in trigger_reason:
+            parts = trigger_reason.split("→")
+            if len(parts) == 2:
+                old_regime = parts[0].replace("Regime:", "").strip()
+                new_regime = parts[1].strip()
+                return f"Regime shifted from {old_regime} to {new_regime}"
+        
+        if "Regime shift" in trigger_reason:
+            return "Market structure changed"
+        
+        if "crossed above" in trigger_reason:
+            return trigger_reason  # Already readable
+        
+        if "crossed below" in trigger_reason:
+            return trigger_reason  # Already readable
+        
+        if "24h:" in trigger_reason:
+            return f"Significant price movement: {trigger_reason}"
+        
+        if "7d:" in trigger_reason:
+            return f"Weekly momentum shift: {trigger_reason}"
+        
+        return trigger_reason
+    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -466,31 +592,38 @@ class MarketIntelligence:
                     regime_emoji = "🟡"
                 
                 # Tail risk display
-                tail_display = regime_data['tail_risk']
+                tail_display = regime_data['tail_risk'].lower()
                 if regime_data['tail_direction']:
                     tail_display += f" {regime_data['tail_direction']}"
                 
+                # Build interpretation based on context
+                interpretation_lines = self._build_interpretation(data, regime_data, btc_vol_ratio)
+                interpretation_text = '\n'.join([f"• {line}" for line in interpretation_lines])
+                
+                # Build implication (the "so what")
+                implication = self._build_implication(regime_data, data)
+                
+                # Format trigger for humans (not internal log)
+                human_trigger = self._format_trigger_for_humans(trigger_reason)
+                
                 timestamp = datetime.utcnow().strftime('%d %b %Y %H:%M UTC')
                 
-                # New regime-based message format
+                # New UX-focused message format
                 message = f"""<b>CRYPTO · MARKET STATE</b>
 
-{regime_emoji} Regime: {regime}
-Confidence: {regime_data['confidence_label']} ({regime_data['confidence']}%)
+{regime_emoji} {regime}
+Confidence: {regime_data['confidence']}%
 Tail risk: {tail_display}
 
-<b>Prices</b>
-• BTC: ${data['btc']['price']:,.0f} ({data['btc']['change_24h']:+.1f}% 24h | {data['btc']['change_7d']:+.1f}% 7d)
-• ETH: ${data['eth']['price']:,.0f} ({data['eth']['change_24h']:+.1f}% 24h)
+<b>Interpretation</b>
+{interpretation_text}
 
-<b>Context</b>
-• RSI (daily): {data['btc']['rsi']:.0f} ({data['btc']['rsi_context']})
-• Volume: {btc_vol_ratio:.1f}x average
+<b>Implication</b>
+{implication}
 
-<b>Bias</b>
-{regime_data['bias']}
+<b>What changed</b>
+{human_trigger}
 
-<i>Trigger: {trigger_reason}</i>
 <i>Radar | {timestamp}</i>"""
                 
                 # Publish first, then update state only on success
